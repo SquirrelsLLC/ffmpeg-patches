@@ -1,0 +1,146 @@
+diff --git a/libavformat/hls.c b/libavformat/hls.c
+index 786934af03..bf90582755 100644
+--- a/libavformat/hls.c
++++ b/libavformat/hls.c
+@@ -26,6 +26,7 @@
+  * http://tools.ietf.org/html/draft-pantos-http-live-streaming
+  */
+ 
++#include "libavformat/http.h"
+ #include "libavutil/avstring.h"
+ #include "libavutil/avassert.h"
+ #include "libavutil/intreadwrite.h"
+@@ -94,6 +95,7 @@ struct playlist {
+     AVIOContext pb;
+     uint8_t* read_buffer;
+     AVIOContext *input;
++    int input_done;
+     AVFormatContext *parent;
+     int index;
+     AVFormatContext *ctx;
+@@ -206,6 +208,8 @@ typedef struct HLSContext {
+     int strict_std_compliance;
+     char *allowed_extensions;
+     int max_reload;
++    int http_keepalive;
++    AVIOContext *playlist_pb;
+ } HLSContext;
+ 
+ static int read_chomp_line(AVIOContext *s, char *buf, int maxlen)
+@@ -640,7 +644,17 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
+     else if (strcmp(proto_name, "file") || !strncmp(url, "file,", 5))
+         return AVERROR_INVALIDDATA;
+ 
+-    ret = s->io_open(s, pb, url, AVIO_FLAG_READ, &tmp);
++    if (c->http_keepalive && *pb && av_strstart(proto_name, "http", NULL)) {
++        URLContext *uc = (URLContext *)av_opt_child_next(*pb, NULL);
++        (*pb)->eof_reached = 0;
++        ret = ff_http_do_new_request(uc, url);
++        if (ret < 0) {
++            ff_format_io_close(c->ctx, pb);
++            ret = s->io_open(s, pb, url, AVIO_FLAG_READ, &tmp);
++        }
++    } else {
++        ret = s->io_open(s, pb, url, AVIO_FLAG_READ, &tmp);
++    }
+     if (ret >= 0) {
+         // update cookies on http response with setcookies.
+         char *new_cookies = NULL;
+@@ -683,10 +697,20 @@ static int parse_playlist(HLSContext *c, const char *url,
+     char tmp_str[MAX_URL_SIZE];
+     struct segment *cur_init_section = NULL;
+ 
++    if (!in && c->http_keepalive && c->playlist_pb) {
++        in = c->playlist_pb;
++        URLContext *uc = (URLContext *)av_opt_child_next(in, NULL);
++        in->eof_reached = 0;
++        ret = ff_http_do_new_request(uc, url);
++        if (ret < 0) {
++            ff_format_io_close(c->ctx, &c->playlist_pb);
++            in = NULL;
++        }
++    }
++
+     if (!in) {
+ #if 1
+         AVDictionary *opts = NULL;
+-        close_in = 1;
+         /* Some HLS servers don't like being sent the range header */
+         av_dict_set(&opts, "seekable", "0", 0);
+ 
+@@ -696,10 +720,18 @@ static int parse_playlist(HLSContext *c, const char *url,
+         av_dict_set(&opts, "headers", c->headers, 0);
+         av_dict_set(&opts, "http_proxy", c->http_proxy, 0);
+ 
++        if (c->http_keepalive)
++            av_dict_set(&opts, "multiple_requests", "1", 0);
++
+         ret = c->ctx->io_open(c->ctx, &in, url, AVIO_FLAG_READ, &opts);
+         av_dict_free(&opts);
+         if (ret < 0)
+             return ret;
++
++        if (c->http_keepalive)
++            c->playlist_pb = in;
++        else
++            close_in = 1;
+ #else
+         ret = open_in(c, &in, url);
+         if (ret < 0)
+@@ -1111,6 +1143,9 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg)
+     av_dict_set(&opts, "http_proxy", c->http_proxy, 0);
+     av_dict_set(&opts, "seekable", "0", 0);
+ 
++    if (c->http_keepalive)
++        av_dict_set(&opts, "multiple_requests", "1", 0);
++
+     if (seg->size >= 0) {
+         /* try to restrict the HTTP request to the part we want
+          * (if this is in fact a HTTP request) */
+@@ -1270,7 +1305,7 @@ restart:
+     if (!v->needed)
+         return AVERROR_EOF;
+ 
+-    if (!v->input) {
++    if (!v->input || (c->http_keepalive && v->input_done)) {
+         int64_t reload_interval;
+         struct segment *seg;
+ 
+@@ -1329,6 +1364,7 @@ reload:
+             goto reload;
+         }
+ 
++        v->input_done = 0;
+         seg = current_segment(v);
+ 
+         /* load/update Media Initialization Section, if any */
+@@ -1366,7 +1402,11 @@ reload:
+ 
+         return ret;
+     }
+-    ff_format_io_close(v->parent, &v->input);
++    if (c->http_keepalive) {
++        v->input_done = 1;
++    } else {
++        ff_format_io_close(v->parent, &v->input);
++    }
+     v->cur_seq_no++;
+ 
+     c->cur_seq_no = v->cur_seq_no;
+@@ -1627,6 +1667,7 @@ static int hls_close(AVFormatContext *s)
+     free_rendition_list(c);
+ 
+     av_dict_free(&c->avio_opts);
++    ff_format_io_close(c->ctx, &c->playlist_pb);
+ 
+     return 0;
+ }
+@@ -2157,6 +2198,8 @@ static const AVOption hls_options[] = {
+         INT_MIN, INT_MAX, FLAGS},
+     {"max_reload", "Maximum number of times a insufficient list is attempted to be reloaded",
+         OFFSET(max_reload), AV_OPT_TYPE_INT, {.i64 = 1000}, 0, INT_MAX, FLAGS},
++    {"http_keepalive", "re-use http connections when reloading playlists and fetching new segments",
++        OFFSET(http_keepalive), AV_OPT_TYPE_BOOL, {.i64 = 0}, INT_MIN, 1, FLAGS},
+     {NULL}
+ };
+ 
