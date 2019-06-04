@@ -105,7 +105,7 @@ def patch(pwd, target, version)
       Dir.chdir(File.join(pwd, target))
       update = original(path)
       if not (update == nil)
-        command = ["sudo", "patch", "--strip=1", "--batch", "-i", File.join(pwd, version, path)]
+        command = ["patch", "--strip=1", "--batch", "-i", File.join(pwd, version, path)]
         if not (execute(command, []) == 0)
           LOGGER.error("Patch failure?")
           Dir.chdir(pwd)
@@ -120,7 +120,7 @@ end
 
 def configure(pwd, target)
   Dir.chdir(File.join(pwd, target))
-  command = ["sudo", "./configure", "--enable-shared", "--disable-static", "--enable-openssl", "--prefix=/usr/local/"]
+  command = ["./configure", "--enable-shared", "--disable-static", "--enable-openssl", "--prefix=/usr/local/"]
   if not (execute(command, []) == 0)
     LOGGER.error("Configure failure?")
     Dir.chdir(pwd)
@@ -132,7 +132,7 @@ end
 
 def make(pwd, target)
   Dir.chdir(File.join(pwd, target))
-  command = ["sudo", "make"]
+  command = ["make"]
   if not (execute(command, []) == 0)
     LOGGER.error("Make failure?")
     Dir.chdir(pwd)
