@@ -1,3 +1,4 @@
+#!/usr/bin/env ruby
 
 # Author: Pierce Brooks
 
@@ -32,7 +33,7 @@ def execute(arguments, options)
         stdin.puts(option+"\n")
       end
     end
-    stdout.each_line{|line| LOGGER.info("#{line}")}
+    stdout.each_line{|line| LOGGER.info("#{line.strip}")}
     stdin.close
   end
   return 0
@@ -240,7 +241,7 @@ def launch(arguments)
 
   result = nil
   success = nil
-  
+
   version = "n3.4"
   parallels = "4"
 
@@ -266,7 +267,7 @@ def launch(arguments)
     LOGGER.error("Error?")
     success = false
   end
-  
+
   if not (success == nil)
     return success
   end
